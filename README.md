@@ -1,5 +1,7 @@
 # Proyecto 3 — Sistema solar con software renderer
 
+**Integrantes:** Martin Villatoro (24033) · Esteban de la Peña (24171) · Emily Góngora (24308)
+
 **🎬 [Ver video del recorrido](https://uvggt-my.sharepoint.com/:f:/r/personal/vil24033_uvg_edu_gt/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fvil24033%5Fuvg%5Fedu%5Fgt%2FDocuments%2F6o%2E%20Semestre%2FGraficas%2FVideo%20Proyecto%203&share=cgrv4iZIeQ6qQ4BN1avyYcV2EgUCR4gyZpII%5FHudufYB7LJgnw)**: vuelo espacial, acercamiento,
 vuelta alrededor de un planeta y alejamiento.
 
