@@ -1,5 +1,8 @@
 # Proyecto 3 — Sistema solar con software renderer
 
+**🎬 [Ver video del recorrido](https://uvggt-my.sharepoint.com/:f:/r/personal/vil24033_uvg_edu_gt/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fvil24033%5Fuvg%5Fedu%5Fgt%2FDocuments%2F6o%2E%20Semestre%2FGraficas%2FVideo%20Proyecto%203&share=cgrv4iZIeQ6qQ4BN1avyYcV2EgUCR4gyZpII%5FHudufYB7LJgnw)**: vuelo espacial, acercamiento,
+vuelta alrededor de un planeta y alejamiento.
+
 Un pequeño sistema solar estilo "mini-mundos" que se explora volando un
 cohete. Todo el 3D (transformaciones, recorte, rasterización, z-buffer,
 shaders) está implementado en este repositorio; raylib solo se usa para la
@@ -27,8 +30,27 @@ ventana, la entrada y mostrar el framebuffer.
 |---|---|
 | ![Hielo](capturas/hielo.png) | ![Hielo de noche](capturas/hielo_noche.png) |
 
-> 🚧 En desarrollo. Ver [PENDIENTES.md](PENDIENTES.md) para el estado de la
-> rúbrica y lo que falta.
+## Características que solicitamos evaluar
+
+Total: **172 puntos técnicos** del menú (+ presentación). La nota máxima es 100.
+
+| Característica | Pts | Dónde verlo |
+|---|---|---|
+| Planetas distinguibles que orbitan, rotan y se ven de cerca (hay 8, cuentan 5) | 50 | Jungla y Embrujado (`src/planets.rs`), Lava, Desierto, Mecánico y Cristalino (`src/mundos/esteban.rs`), Ciudad y Hielo (`src/mundos/emily/`) |
+| Tipos de modelo propios sobre los planetas (4 × 5) | 20 | Palmera, helecho, esqueleto de dinosaurio, árbol seco, lápida, casona, fantasma, columnas de basalto, obsidiana, cactus, arcos, engranajes, antenas, cristales, monolitos, edificios, torre de radio, icebergs, iglús, faro… (scripts en `assets/models/`) |
+| Distribución procedural reproducible con semilla | 10 | `src/props.rs` → `place`: dirección al azar con `Rng` sembrado, filtrada por ruido fBm, altura y pendiente. Test `same_seed_same_positions_and_on_surface` |
+| Posición y orientación correctas sobre la superficie curva mientras el planeta rota | 5 | `src/props.rs` → `instance_matrix`: apoyado en la altura real, vertical = dirección radial; horneado en espacio local del planeta |
+| Shaders propios con efecto distinto (4 × 6) | 24 | `src/shaders/`: sol, jungla, embrujado, toon, flama, fantasma; y lava, desierto, mecánico, cristalino, ciudad, hielo en `src/mundos/` |
+| Shader animado | 8 | Plasma del sol, flama del propulsor, lava de la jungla, niebla y farolitos del embrujado, fantasmas, tráfico de la ciudad, olas y aurora del hielo |
+| Mapeo de normales | 8 | Olas del planeta Hielo: la normal se perturba con el gradiente analítico de las olas (`src/mundos/emily/hielo.rs` → `mar`) |
+| Deformación de la geometría con ruido | 10 | `src/planet.rs` → `build_terrain_mesh`: cada vértice de la icosfera se desplaza con la función de altura (fBm / ridged) |
+| Generación / subdivisión procedural de geometría antes de rasterizar | 10 | `src/mesh.rs` → `icosphere`: icosaedro subdividido 2 a 5 veces (320 a 20 480 triángulos) |
+| Aceleración, frenado y giro progresivos, iguales a cualquier FPS | 8 | `src/ship.rs`: física con paso fijo de 120 Hz e interpolación. Test `same_result_at_30_and_144_fps` |
+| Colisión que impide atravesar el planeta | 4 | `src/collision.rs`: usa la altura real del terreno; aviso "CONTACTO" en el HUD |
+| Descarte de objetos fuera de la vista | 7 | `src/scene.rs` → `draw_body` (esfera envolvente contra el frustum). **F1** muestra los contadores y **F3** lo apaga: vista lejana 7 628 → 43 798 triángulos procesados |
+| Niveles de detalle según la distancia | 8 | `src/scene.rs` → `select_lod` (malla según el tamaño en pantalla; objetos de superficie solo de cerca). **F4** lo apaga: vista lejana 7 628 → 255 502 triángulos procesados |
+
+No implementados: modo de control local para rodear un planeta y gravedad.
 
 ## Integrantes
 
