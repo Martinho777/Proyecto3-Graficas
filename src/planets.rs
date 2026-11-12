@@ -22,6 +22,9 @@ pub fn solar_system() -> Result<Vec<Planet>, String> {
     // Cada integrante agrega sus mundos en su propio archivo (src/mundos/).
     planets.extend(crate::mundos::esteban::planetas()?);
     planets.extend(crate::mundos::emily::planetas()?);
+    for p in planets.iter_mut() {
+        p.scale_world(crate::config::PLANET_SIZE_SCALE, crate::config::ORBIT_SCALE);
+    }
     Ok(planets)
 }
 

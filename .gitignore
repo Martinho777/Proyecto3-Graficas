@@ -3,3 +3,5 @@
 *.blend1
 *.ppm
 /capturas/tmp/
+# Música de terceros (solo para uso local, no se sube al repositorio).
+/assets/music/*.mp3

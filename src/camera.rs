@@ -87,7 +87,9 @@ impl ShipCamera {
 
     /// Actualiza la cámara con el estado (ya interpolado) de la nave.
     /// El suavizado es exponencial con `dt`, así que no depende de los FPS.
-    pub fn update(&mut self, s: &ShipState, speed: f32, dt: f32, colliders: &[Collider]) -> Camera {
+    /// `focus` es el centro del planeta que se está orbitando (modo órbita):
+    /// en ese caso la cámara se eleva y mira hacia la superficie.
+    pub fn update(&mut self, s: &ShipState, speed: f32, dt: f32, colliders: &[Collider], focus: Option<Vec3>) -> Camera {
         // Al ir rápido la cámara se aleja un poco y el FOV se abre: sensación
         // de velocidad.
         let speed_t = (speed / (SHIP_THRUST / SHIP_DRAG * SHIP_BOOST_MULT)).clamp(0.0, 1.0);
@@ -95,9 +97,24 @@ impl ShipCamera {
 
         match self.mode {
             CameraMode::ThirdPerson => {
-                let dist = CAM_DISTANCE * (1.0 + 0.6 * speed_t);
-                let target_eye = s.pos - s.forward * dist + s.up * CAM_HEIGHT;
-                let target_look = s.pos + s.forward * CAM_LOOK_AHEAD + s.up * (CAM_HEIGHT * 0.35);
+                let (target_eye, target_look) = match focus {
+                    // Órbita: arriba y detrás de la nave, mirando en diagonal
+                    // hacia el suelo que tiene delante. El planeta llena la
+                    // parte baja de la pantalla y se ve el horizonte curvo.
+                    Some(center) => {
+                        let n = (s.pos - center).normalize();
+                        let eye = s.pos - s.forward * CAM_ORBIT_BACK + n * CAM_ORBIT_UP;
+                        let ahead = s.pos + s.forward * CAM_LOOK_AHEAD * 3.0;
+                        (eye, ahead.lerp(center, CAM_ORBIT_TILT))
+                    }
+                    None => {
+                        let dist = CAM_DISTANCE * (1.0 + 0.6 * speed_t);
+                        (
+                            s.pos - s.forward * dist + s.up * CAM_HEIGHT,
+                            s.pos + s.forward * CAM_LOOK_AHEAD + s.up * (CAM_HEIGHT * 0.35),
+                        )
+                    }
+                };
                 if !self.initialized {
                     self.eye = target_eye;
                     self.look = target_look;
@@ -130,11 +147,18 @@ impl ShipCamera {
                 // Posición del piloto dentro del domo (en unidades del modelo
                 // escaladas): un poco adelante y arriba del centro.
                 let eye = s.pos + s.forward * (0.05 * SHIP_SCALE) + s.up * (0.45 * SHIP_SCALE);
+                // En órbita el piloto mira en diagonal hacia la superficie.
+                let wanted = match focus {
+                    Some(center) => (s.forward - (s.pos - center).normalize()).normalize(),
+                    None => s.forward,
+                };
+                let k = 1.0 - (-CAM_FOLLOW * dt).exp();
+                let forward = (self.look - self.eye).normalize().lerp(wanted, k).normalize();
                 // Al volver a tercera persona, partir desde aquí.
                 self.eye = eye;
-                self.look = eye + s.forward;
+                self.look = eye + forward;
                 self.up = s.up;
-                Camera { eye, forward: s.forward, up: s.up, fov_y: fov, near: NEAR, far: FAR }
+                Camera { eye, forward, up: s.up, fov_y: fov, near: NEAR, far: FAR }
             }
         }
     }

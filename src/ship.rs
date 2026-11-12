@@ -10,6 +10,36 @@ use crate::collision::{Collider, Surface};
 use crate::config::*;
 use crate::math::{Mat4, Vec3};
 
+/// Parámetros de vuelo y de dibujo de un tipo de nave (ver `SHIP_SPECS` en
+/// `config.rs`).
+pub struct ShipSpec {
+    pub name: &'static str,
+    /// Frase corta para la pantalla de inicio.
+    pub tagline: &'static str,
+    /// Ruta del .obj (relativa a la carpeta del proyecto).
+    pub model: &'static str,
+    pub scale: f32,
+    pub thrust: f32,
+    pub reverse: f32,
+    pub lift: f32,
+    pub boost_mult: f32,
+    pub drag: f32,
+    pub brake_drag: f32,
+    pub pitch_rate: f32,
+    pub yaw_rate: f32,
+    pub roll_rate: f32,
+    pub turn_response: f32,
+    /// Amortiguamiento de la velocidad lateral (1/s).
+    pub grip: f32,
+    pub restitution: f32,
+    /// Toberas: (posición en coordenadas del modelo, ancho de la flama).
+    pub flames: &'static [(Vec3, f32)],
+    /// Multiplicador del largo de la flama.
+    pub flame_len: f32,
+    /// Para la pantalla de inicio: (velocidad, control) de 1 a 5.
+    pub stats: (u8, u8),
+}
+
 /// Lo que pide quien juega en este instante. Ejes en [-1, 1].
 #[derive(Clone, Copy, Default)]
 pub struct ShipInput {
@@ -80,6 +110,8 @@ pub enum OrbitToggle {
 
 pub struct Ship {
     prev: ShipState,
+    /// Índice en `SHIP_SPECS` (qué nave es).
+    pub kind: usize,
     /// Órbita automática activa (None = vuelo libre).
     pub orbit: Option<OrbitLock>,
     pub state: ShipState,
@@ -96,12 +128,19 @@ pub struct Ship {
 }
 
 impl Ship {
+    /// Nave equilibrada (el cohete). Solo la usan las pruebas.
+    #[cfg(test)]
     pub fn new(pos: Vec3, forward: Vec3) -> Self {
+        Self::with_kind(0, pos, forward)
+    }
+
+    pub fn with_kind(kind: usize, pos: Vec3, forward: Vec3) -> Self {
         let forward = forward.normalize();
         let right = forward.cross(Vec3::Y).normalize();
         let state = ShipState { pos, vel: Vec3::ZERO, forward, up: right.cross(forward) };
         Self {
             prev: state,
+            kind: kind.min(SHIP_SPECS.len() - 1),
             state,
             orbit: None,
             ang_vel: Vec3::ZERO,
@@ -130,8 +169,19 @@ impl Ship {
         self.prev.interpolate(&self.state, self.accumulator / PHYSICS_DT)
     }
 
+    pub fn spec(&self) -> &'static ShipSpec {
+        &SHIP_SPECS[self.kind]
+    }
+
     pub fn speed(&self) -> f32 {
         self.state.vel.length()
+    }
+
+    /// Empujón instantáneo (golpe del enemigo). Suelta la órbita automática.
+    pub fn knockback(&mut self, dv: Vec3) {
+        self.orbit = None;
+        self.state.vel += dv;
+        self.contact_timer = 0.0;
     }
 
     /// Planeta más cercano (por altura sobre su superficie) y esa altura.
@@ -171,7 +221,7 @@ impl Ship {
         self.orbit = Some(OrbitLock {
             body,
             name: c.name,
-            radius: r.length().max(min_radius),
+            radius: r.length().clamp(min_radius, min_radius - ORBIT_MIN_ALTITUDE + ORBIT_PREFERRED_ALTITUDE.max(ORBIT_MIN_ALTITUDE)),
             axis: axis.normalize(),
             speed: tangent.length().clamp(ORBIT_DEFAULT_SPEED, ORBIT_MAX_SPEED),
         });
@@ -224,9 +274,10 @@ impl Ship {
     }
 
     fn resolve_collisions(&mut self, colliders: &[Collider]) {
+        let restitution = self.spec().restitution;
         let s = &mut self.state;
         for c in colliders {
-            if let Some(hit) = c.resolve(&mut s.pos, &mut s.vel, SHIP_COLLISION_RADIUS, SHIP_RESTITUTION, SHIP_FRICTION) {
+            if let Some(hit) = c.resolve(&mut s.pos, &mut s.vel, SHIP_COLLISION_RADIUS, restitution, SHIP_FRICTION) {
                 self.contact_with = c.name;
                 if hit.impact_speed > 0.5 || self.contact_timer > 0.0 {
                     self.contact_timer = 1.0;
@@ -241,15 +292,16 @@ impl Ship {
             self.orbit_step(input, dt, colliders);
             return;
         }
+        let spec = self.spec();
         // --- Giro progresivo -------------------------------------------------
         // La velocidad angular se acerca a la deseada de forma exponencial:
         // no gira de golpe ni se detiene de golpe.
         let target = Vec3::new(
-            input.pitch * SHIP_PITCH_RATE,
-            input.yaw * SHIP_YAW_RATE,
-            input.roll * SHIP_ROLL_RATE,
+            input.pitch * spec.pitch_rate,
+            input.yaw * spec.yaw_rate,
+            input.roll * spec.roll_rate,
         );
-        let k = 1.0 - (-SHIP_TURN_RESPONSE * dt).exp();
+        let k = 1.0 - (-spec.turn_response * dt).exp();
         self.ang_vel = self.ang_vel.lerp(target, k);
 
         let s = &mut self.state;
@@ -268,23 +320,32 @@ impl Ship {
 
         // --- Aceleración y frenado progresivos -------------------------------
         self.boosting = input.boost && input.thrust > 0.0;
-        let boost = if self.boosting { SHIP_BOOST_MULT } else { 1.0 };
+        let boost = if self.boosting { spec.boost_mult } else { 1.0 };
         let mut accel = Vec3::ZERO;
         if input.thrust > 0.0 {
-            accel += s.forward * (SHIP_THRUST * boost * input.thrust);
+            accel += s.forward * (spec.thrust * boost * input.thrust);
         } else if input.thrust < 0.0 {
             // Reversa suave (útil para retroceder cerca de un planeta).
-            accel += s.forward * (SHIP_REVERSE * input.thrust);
+            accel += s.forward * (spec.reverse * input.thrust);
         }
-        accel += s.up * (SHIP_LIFT * input.lift);
+        accel += s.up * (spec.lift * input.lift);
 
         s.vel += accel * dt;
 
         // Rozamiento exponencial: define una velocidad máxima "natural"
         // (thrust / drag) y hace que la nave se detenga sola poco a poco.
         // Al frenar (S) el rozamiento es mucho mayor.
-        let drag = if input.thrust < 0.0 { SHIP_BRAKE_DRAG } else { SHIP_DRAG };
+        let drag = if input.thrust < 0.0 { spec.brake_drag } else { spec.drag };
         s.vel = s.vel * (-drag * dt).exp();
+
+        // Agarre: se elimina poco a poco la velocidad que no va en la
+        // dirección de la nariz (y del empuje vertical). Con agarre alto la
+        // nave "dobla" como un vehículo; con cero derrapa como en el espacio.
+        if spec.grip > 0.0 {
+            let along = s.forward * s.vel.dot(s.forward) + s.up * s.vel.dot(s.up);
+            let lateral = s.vel - along;
+            s.vel = along + lateral * (-spec.grip * dt).exp();
+        }
 
         s.pos += s.vel * dt;
 
@@ -292,16 +353,16 @@ impl Ship {
         self.resolve_collisions(colliders);
 
         // Potencia visual del motor (flama), también suavizada.
-        let target_thr = (input.thrust.max(0.0) * boost / SHIP_BOOST_MULT).max(input.lift.abs() * 0.3);
+        let target_thr = (input.thrust.max(0.0) * boost / spec.boost_mult).max(input.lift.abs() * 0.3);
         self.throttle += (target_thr - self.throttle) * (1.0 - (-8.0 * dt).exp());
     }
 }
 
 /// Matriz de modelo de la nave. El modelo .obj mira hacia -Z local, así que
 /// el eje Z local corresponde a "atrás" (-forward) en mundo.
-pub fn model_matrix(s: &ShipState) -> Mat4 {
+pub fn model_matrix(s: &ShipState, scale: f32) -> Mat4 {
     let right = s.right();
-    Mat4::translation(s.pos) * Mat4::from_basis(right, s.up, -s.forward) * Mat4::uniform_scale(SHIP_SCALE)
+    Mat4::translation(s.pos) * Mat4::from_basis(right, s.up, -s.forward) * Mat4::uniform_scale(scale)
 }
 
 #[cfg(test)]
@@ -363,6 +424,66 @@ mod tests {
         assert_eq!(ship.contact_with, "p");
     }
 
+    /// Acelera a fondo en línea recta `secs` segundos y devuelve la rapidez.
+    fn top_speed(kind: usize, secs: f32) -> f32 {
+        let mut ship = Ship::with_kind(kind, Vec3::ZERO, -Vec3::Z);
+        let input = ShipInput { thrust: 1.0, ..Default::default() };
+        for _ in 0..(secs * 60.0) as u32 {
+            ship.update(&input, 1.0 / 60.0, &[]);
+        }
+        ship.speed()
+    }
+
+    #[test]
+    fn light_is_fastest_and_heavy_slowest() {
+        let (bal, light, heavy) = (top_speed(0, 15.0), top_speed(1, 15.0), top_speed(2, 15.0));
+        assert!(light > bal * 1.5, "ligera {light} vs cohete {bal}");
+        assert!(heavy < bal * 0.7, "pesada {heavy} vs cohete {bal}");
+    }
+
+    /// Acelera, luego gira 90° a la derecha sin soltar W y mide cuánta
+    /// velocidad queda "de lado" (derrape) respecto de la nariz.
+    fn drift_after_turn(kind: usize) -> f32 {
+        let mut ship = Ship::with_kind(kind, Vec3::ZERO, -Vec3::Z);
+        let go = ShipInput { thrust: 1.0, ..Default::default() };
+        for _ in 0..240 {
+            ship.update(&go, 1.0 / 60.0, &[]);
+        }
+        let turn = ShipInput { thrust: 1.0, yaw: 1.0, ..Default::default() };
+        let mut t = 0.0;
+        while ship.state.forward.dot(-Vec3::Z) > 0.0 && t < 10.0 {
+            ship.update(&turn, 1.0 / 60.0, &[]);
+            t += 1.0 / 60.0;
+        }
+        let v = ship.state.vel;
+        let lateral = v - ship.state.forward * v.dot(ship.state.forward);
+        lateral.length() / v.length()
+    }
+
+    #[test]
+    fn heavy_goes_where_it_points_light_drifts() {
+        let (light, heavy) = (drift_after_turn(1), drift_after_turn(2));
+        assert!(heavy < 0.3, "la pesada casi no derrapa: {heavy}");
+        assert!(light > heavy * 2.0, "la ligera derrapa más: {light} vs {heavy}");
+    }
+
+    #[test]
+    fn heavy_stops_and_settles_faster() {
+        // Misma velocidad inicial: la pesada frena antes.
+        let brake = ShipInput { thrust: -1.0, ..Default::default() };
+        let stop_time = |kind: usize| {
+            let mut ship = Ship::with_kind(kind, Vec3::ZERO, -Vec3::Z);
+            ship.state.vel = -Vec3::Z * 12.0;
+            let mut t = 0.0;
+            while ship.speed() > 1.0 && t < 30.0 {
+                ship.update(&brake, 1.0 / 60.0, &[]);
+                t += 1.0 / 60.0;
+            }
+            t
+        };
+        assert!(stop_time(2) < stop_time(0) && stop_time(0) < stop_time(1));
+    }
+
     #[test]
     fn orbit_mode_circles_planet_at_constant_altitude() {
         use crate::collision::{Collider, Surface};
@@ -402,11 +523,14 @@ mod tests {
             let p = ship.state.pos;
             angle += prev.normalize().dot(p.normalize()).clamp(-1.0, 1.0).acos();
             prev = p;
-            if i > 120 {
-                assert!((p.length() - 12.0).abs() < 0.3, "altura estable: {}", p.length());
+            // Baja a la altura preferida sobre el terreno y se queda ahí.
+            if i > 240 {
+                let expected = 7.0 + ORBIT_PREFERRED_ALTITUDE;
+                // El resorte deja un desfase pequeño por la fuerza centrífuga.
+                assert!((p.length() - expected).abs() < 0.5, "altura estable: {}", p.length());
             }
         }
-        // 10 s a 5 u/s sobre un radio de 12: ~4 radianes de vuelta.
+        // 10 s a 5 u/s sobre un radio de ~10: más de 4 radianes de vuelta.
         assert!(angle > 3.0, "debe rodear el planeta solo: {angle}");
         // La nave mira hacia donde avanza y su techo apunta hacia fuera.
         assert!(ship.state.up.dot(ship.state.pos.normalize()) > 0.95);

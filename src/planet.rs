@@ -123,6 +123,15 @@ impl Planet {
         self
     }
 
+    /// Agranda el planeta (con su relieve y sus objetos) y su órbita.
+    /// Todo lo demás está en espacio local (radio 1), así que basta con
+    /// escalar el radio, la órbita y la esfera envolvente.
+    pub fn scale_world(&mut self, size: f32, orbit: f32) {
+        self.def.radius *= size;
+        self.def.orbit.radius *= orbit;
+        self.bounding_radius *= size;
+    }
+
     /// Agrega objetos que flotan alrededor del planeta.
     pub fn with_floaters(mut self, spec: FloaterSpec) -> Self {
         let top = spec.altitude.1 + spec.scale.1;
