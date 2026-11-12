@@ -276,24 +276,3 @@ permiten comparar el trabajo del renderer.
 | `assets/models/nave_cohete.py` | Script de Blender que genera la Pikmin Ship |
 | `assets/models/naves_extra.py` | Script de Blender que genera Starfoz, Tortuga y el Devorador |
 | `assets/models/modelos_superficie.py` | Script de Blender: palmera, helecho, esqueleto, árbol seco, lápida, casona, fantasma |
-
-## Recursos externos y uso de IA
-
-- **Música:** las pistas de fondo pertenecen a la banda sonora de *Star Fox*
-  (Nintendo) y se emplean únicamente de forma local con fines académicos.
-  Por tratarse de material con derechos de autor no forman parte del
-  repositorio (`.gitignore`). Todos los efectos de sonido son sintetizados
-  por el propio programa.
-- **Modelos:** todas las naves y objetos fueron creados por el grupo mediante
-  scripts de Blender incluidos en `assets/models/`. Los nombres de algunas
-  naves aluden en tono de homenaje a otros juegos, pero los diseños son
-  originales.
-- **Martin Villatoro:** utilicé un asistente de IA (Claude) como apoyo para
-  implementar la pantalla de inicio, el modo órbita, las naves adicionales,
-  el modo supervivencia y el sistema de audio. Revisé, probé y puedo explicar
-  el código entregado.
-- **Emily Góngora:** usé un asistente de IA (Claude) como apoyo para escribir
-  el código de los planetas Ciudad y Hielo (shaders y reglas de colocación en
-  `src/mundos/emily/`), el script de modelos `assets/models/modelos_emily.py`
-  y para iterar el aspecto con capturas y `--bench`. Revisé, probé y puedo
-  explicar todo el código entregado.
