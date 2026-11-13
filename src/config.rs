@@ -60,6 +60,26 @@ pub const SHIP_ROLL_RATE: f32 = 2.6;
 /// Qué tan rápido la velocidad angular alcanza la deseada (1/s).
 pub const SHIP_TURN_RESPONSE: f32 = 5.0;
 
+// --- Modo órbita (tecla O) ---------------------------------------------------
+
+/// Altura máxima sobre la superficie para poder engancharse a una órbita.
+pub const ORBIT_ENGAGE_ALTITUDE: f32 = 14.0;
+/// Altura mínima de la órbita sobre el terreno (no rozar montañas ni objetos).
+pub const ORBIT_MIN_ALTITUDE: f32 = 1.5;
+/// Velocidad de la órbita (unidades/s): la inicial, la mínima y la máxima.
+pub const ORBIT_DEFAULT_SPEED: f32 = 5.0;
+pub const ORBIT_MIN_SPEED: f32 = 1.5;
+pub const ORBIT_MAX_SPEED: f32 = 18.0;
+/// Cuánto cambian velocidad (W/S), altura (Espacio/Ctrl) e inclinación del
+/// plano de la órbita (A/D) por segundo.
+pub const ORBIT_ACCEL: f32 = 6.0;
+pub const ORBIT_CLIMB: f32 = 3.0;
+pub const ORBIT_TILT_RATE: f32 = 0.8;
+/// Rigidez del resorte que mantiene la altura y rapidez con la que la nave
+/// alcanza la velocidad de la órbita (1/s).
+pub const ORBIT_SPRING: f32 = 2.5;
+pub const ORBIT_RESPONSE: f32 = 3.0;
+
 /// Radio de la esfera de colisión de la nave (en mundo).
 pub const SHIP_COLLISION_RADIUS: f32 = 0.5;
 /// Rebote al chocar (0 = nada, 1 = rebote perfecto) y fricción con la superficie.

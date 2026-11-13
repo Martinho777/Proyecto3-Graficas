@@ -29,7 +29,7 @@ use config::*;
 use math::Vec3;
 use renderer::Renderer;
 use scene::{Scene, ShipView};
-use ship::{Ship, ShipInput};
+use ship::{OrbitToggle, Ship, ShipInput};
 
 /// Posición inicial: afuera de la órbita más lejana, mirando hacia el sol.
 fn spawn_ship(scene: &Scene) -> Ship {
@@ -59,7 +59,8 @@ fn main() {
         .resizable()
         .build();
     rl.set_target_fps(144);
-    rl.disable_cursor();
+    // En la pantalla de inicio el mouse queda libre.
+    rl.enable_cursor();
     // ESC no cierra: se usa para soltar el mouse. Se sale cerrando la ventana.
     rl.set_exit_key(None);
 
@@ -75,13 +76,50 @@ fn main() {
     // Palanca virtual del mouse (x = guiñada, y = cabeceo), en [-1, 1].
     let mut stick = (0.0f32, 0.0f32);
     let mut time = 0.0f32;
-    let mut mouse_locked = true;
-    let mut show_debug = true;
+    let mut mouse_locked = false;
+    let mut show_debug = false;
+    let mut en_inicio = true;
+    // Mensaje temporal en pantalla (texto, segundos restantes).
+    let mut aviso: Option<(String, f32)> = None;
 
     while !rl.window_should_close() {
         // Delta time acotado para que una pausa larga no "teletransporte" nada.
         let dt = rl.get_frame_time().min(0.1);
         time += dt;
+
+        // --- Pantalla de inicio ----------------------------------------------
+        // El sistema solar sigue vivo de fondo (mismo renderer, misma escena):
+        // una cámara cinemática lo rodea despacio.
+        if en_inicio {
+            if rl.is_key_pressed(KeyboardKey::KEY_ENTER)
+                || rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT)
+            {
+                en_inicio = false;
+                ship = spawn_ship(&scene);
+                ship_cam = ShipCamera::new();
+                stick = (0.0, 0.0);
+                mouse_locked = true;
+                rl.disable_cursor();
+            } else {
+                let a = time * 0.05;
+                let eye = Vec3::new(a.cos() * 210.0, 70.0, a.sin() * 210.0);
+                let cam = camera::Camera {
+                    eye,
+                    forward: (Vec3::new(0.0, -10.0, 0.0) - eye).normalize(),
+                    up: Vec3::Y,
+                    fov_y: FOV_Y_DEG.to_radians(),
+                    near: NEAR,
+                    far: FAR,
+                };
+                scene.render(&mut renderer, &cam, time, None);
+                screen_tex.update_texture(&renderer.fb.color).expect("update_texture");
+                let (sw, sh) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+                let mut d = rl.begin_drawing(&thread);
+                draw_framebuffer(&mut d, &screen_tex, sw, sh);
+                draw_start_screen(&mut d, sw, sh, time);
+                continue;
+            }
+        }
 
         // --- Entrada general -------------------------------------------------
         if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || rl.is_key_pressed(KeyboardKey::KEY_TAB) {
@@ -104,6 +142,22 @@ fn main() {
         }
         if rl.is_key_pressed(KeyboardKey::KEY_F4) {
             scene.lod_enabled = !scene.lod_enabled;
+        }
+        let colliders = scene.colliders(time);
+        // O: órbita automática alrededor del planeta más cercano.
+        if rl.is_key_pressed(KeyboardKey::KEY_O) {
+            let msg = match ship.toggle_orbit(&colliders) {
+                OrbitToggle::Engaged(name) => format!("Orbitando {name}"),
+                OrbitToggle::Released => "Orbita liberada".to_string(),
+                OrbitToggle::TooFar => "Acercate a un planeta para orbitar".to_string(),
+            };
+            aviso = Some((msg, 2.0));
+        }
+        if let Some((_, t)) = aviso.as_mut() {
+            *t -= dt;
+        }
+        if aviso.as_ref().is_some_and(|(_, t)| *t <= 0.0) {
+            aviso = None;
         }
         if rl.is_key_pressed(KeyboardKey::KEY_F2) {
             // Cámara libre de depuración: arranca donde está la nave.
@@ -157,7 +211,6 @@ fn main() {
         };
 
         // --- Simulación ------------------------------------------------------
-        let colliders = scene.colliders(time);
         ship.update(&ship_input, dt, &colliders);
         let ship_state = ship.render_state();
         let mut camera = ship_cam.update(&ship_state, ship.speed(), dt, &colliders);
@@ -181,19 +234,7 @@ fn main() {
         let fps = rl.get_fps();
         let stats = renderer.stats;
         let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::BLACK);
-        // Escalar manteniendo la proporción 16:9.
-        let scale = (sw / RENDER_W as f32).min(sh / RENDER_H as f32);
-        let (dw, dh) = (RENDER_W as f32 * scale, RENDER_H as f32 * scale);
-        let (ox, oy) = ((sw - dw) * 0.5, (sh - dh) * 0.5);
-        d.draw_texture_pro(
-            &screen_tex,
-            Rectangle::new(0.0, 0.0, RENDER_W as f32, RENDER_H as f32),
-            Rectangle::new(ox, oy, dw, dh),
-            Vector2::zero(),
-            0.0,
-            Color::WHITE,
-        );
+        draw_framebuffer(&mut d, &screen_tex, sw, sh);
 
         // Mira y palanca virtual del mouse.
         let (cx, cy) = (sw * 0.5, sh * 0.5);
@@ -231,6 +272,30 @@ fn main() {
         ];
         for (i, l) in flight.iter().enumerate() {
             d.draw_text(l, sw as i32 - 300, 18 + 24 * i as i32, 20, Color::new(255, 230, 170, 230));
+        }
+        // Órbita automática: estado y controles, o sugerencia si hay un
+        // planeta cerca.
+        if let Some(o) = &ship.orbit {
+            let msg = format!(
+                "ORBITA AUTOMATICA: {}  -  W/S velocidad ({:.1})   Espacio/Ctrl altura   A/D inclinar   O soltar",
+                o.name, o.speed
+            );
+            let w = d.measure_text(&msg, 20);
+            d.draw_rectangle((sw as i32 - w) / 2 - 12, 14, w + 24, 34, Color::new(10, 40, 50, 170));
+            d.draw_text(&msg, (sw as i32 - w) / 2, 22, 20, Color::new(140, 255, 230, 240));
+        } else if free_cam.is_none() {
+            if let Some((i, alt)) = ship.nearest_planet(&colliders) {
+                if alt < ORBIT_ENGAGE_ALTITUDE {
+                    let msg = format!("Presiona O para orbitar {}", colliders[i].name);
+                    let w = d.measure_text(&msg, 22);
+                    d.draw_text(&msg, (sw as i32 - w) / 2, (sh * 0.72) as i32, 22, Color::new(140, 255, 230, 220));
+                }
+            }
+        }
+        if let Some((msg, t)) = &aviso {
+            let w = d.measure_text(msg, 26);
+            let a = (255.0 * t.min(1.0)) as u8;
+            d.draw_text(msg, (sw as i32 - w) / 2, (sh * 0.22) as i32, 26, Color::new(255, 240, 170, a));
         }
         if ship.contact_timer > 0.0 {
             let msg = format!("CONTACTO CON {}", ship.contact_with.to_uppercase());
@@ -270,13 +335,81 @@ fn main() {
             }
         }
         d.draw_text(
-            "W/S acelerar/frenar | Mouse/flechas girar | A/D rodar | Espacio/Ctrl subir/bajar | Shift turbo | C camara | R reiniciar | Tab mouse | F1 debug | F2 libre | F3 culling | F4 LOD",
+            "W/S acelerar/frenar | Mouse/flechas girar | A/D rodar | Espacio/Ctrl subir/bajar | Shift turbo | O orbitar | C camara | R reiniciar | Tab mouse | F1 debug | F2 libre | F3 culling | F4 LOD",
             12,
             sh as i32 - 26,
             16,
             Color::new(200, 200, 220, 200),
         );
     }
+}
+
+/// Dibuja el framebuffer escalado a la ventana, manteniendo 16:9.
+fn draw_framebuffer(d: &mut RaylibDrawHandle, tex: &Texture2D, sw: f32, sh: f32) {
+    d.clear_background(Color::BLACK);
+    let scale = (sw / RENDER_W as f32).min(sh / RENDER_H as f32);
+    let (dw, dh) = (RENDER_W as f32 * scale, RENDER_H as f32 * scale);
+    d.draw_texture_pro(
+        tex,
+        Rectangle::new(0.0, 0.0, RENDER_W as f32, RENDER_H as f32),
+        Rectangle::new((sw - dw) * 0.5, (sh - dh) * 0.5, dw, dh),
+        Vector2::zero(),
+        0.0,
+        Color::WHITE,
+    );
+}
+
+/// Texto centrado horizontalmente.
+fn centered(d: &mut RaylibDrawHandle, text: &str, y: f32, size: i32, sw: f32, color: Color) {
+    let w = d.measure_text(text, size);
+    d.draw_text(text, (sw as i32 - w) / 2, y as i32, size, color);
+}
+
+/// Pantalla de inicio (HUD 2D sobre el sistema solar renderizado).
+fn draw_start_screen(d: &mut RaylibDrawHandle, sw: f32, sh: f32, time: f32) {
+    // Franja oscura para que el texto se lea sobre las estrellas.
+    d.draw_rectangle(0, (sh * 0.12) as i32, sw as i32, (sh * 0.76) as i32, Color::new(5, 5, 20, 150));
+
+    let title_size = (sh * 0.11) as i32;
+    // Sombra + título.
+    let title = "MINI-MUNDOS";
+    let w = d.measure_text(title, title_size);
+    let (tx, ty) = ((sw as i32 - w) / 2, (sh * 0.16) as i32);
+    d.draw_text(title, tx + 4, ty + 4, title_size, Color::new(120, 40, 10, 200));
+    d.draw_text(title, tx, ty, title_size, Color::new(255, 200, 70, 255));
+    centered(d, "Un sistema solar dibujado con un renderizador por software", sh * 0.30, (sh * 0.03) as i32, sw, Color::new(230, 230, 255, 230));
+    centered(
+        d,
+        "Martin Villatoro (24033)  -  Esteban de la Peña (24171)  -  Emily Góngora (24308)",
+        sh * 0.36,
+        (sh * 0.024) as i32,
+        sw,
+        Color::new(190, 190, 220, 220),
+    );
+
+    let controls = [
+        ("W / S", "acelerar / frenar"),
+        ("Mouse o flechas", "girar la nave"),
+        ("A / D", "rodar"),
+        ("Espacio / Ctrl", "subir / bajar"),
+        ("Shift", "turbo"),
+        ("O", "orbitar el planeta cercano"),
+        ("C", "camara: tercera persona / cabina"),
+        ("R", "reiniciar la nave"),
+        ("F1 / F3 / F4", "contadores / culling / LOD"),
+    ];
+    let size = (sh * 0.026) as i32;
+    let (col_key, col_desc) = (sw * 0.5 - sh * 0.02, sw * 0.5 + sh * 0.02);
+    for (i, (k, desc)) in controls.iter().enumerate() {
+        let y = (sh * 0.44 + i as f32 * sh * 0.037) as i32;
+        let kw = d.measure_text(k, size);
+        d.draw_text(k, col_key as i32 - kw, y, size, Color::new(140, 255, 230, 240));
+        d.draw_text(desc, col_desc as i32, y, size, Color::new(235, 235, 245, 230));
+    }
+
+    // "Presiona ENTER" parpadeando suavemente.
+    let a = (170.0 + 85.0 * (time * 3.0).sin()) as u8;
+    centered(d, "Presiona ENTER o haz clic para despegar", sh * 0.80, (sh * 0.04) as i32, sw, Color::new(255, 240, 170, a));
 }
 
 /// Renderiza un cuadro sin abrir ventana y lo guarda como PPM. Sirve para

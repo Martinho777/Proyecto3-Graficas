@@ -6,7 +6,7 @@
 //! actual al dibujar. Así la nave acelera, frena y gira exactamente igual en
 //! una computadora a 30 FPS que en otra a 144 FPS.
 
-use crate::collision::Collider;
+use crate::collision::{Collider, Surface};
 use crate::config::*;
 use crate::math::{Mat4, Vec3};
 
@@ -55,8 +55,33 @@ impl ShipState {
     }
 }
 
+/// Enganche de órbita automática alrededor de un cuerpo (tecla O).
+#[derive(Clone, Copy, Debug)]
+pub struct OrbitLock {
+    /// Índice del cuerpo en la lista de colliders.
+    pub body: usize,
+    pub name: &'static str,
+    /// Distancia deseada al centro del cuerpo.
+    pub radius: f32,
+    /// Eje del plano de la órbita (unitario). La nave avanza en la dirección
+    /// `axis × n`, donde `n` es la vertical local.
+    pub axis: Vec3,
+    /// Velocidad tangencial (unidades/s).
+    pub speed: f32,
+}
+
+/// Resultado de presionar O.
+pub enum OrbitToggle {
+    Engaged(&'static str),
+    Released,
+    /// No hay ningún planeta lo bastante cerca.
+    TooFar,
+}
+
 pub struct Ship {
     prev: ShipState,
+    /// Órbita automática activa (None = vuelo libre).
+    pub orbit: Option<OrbitLock>,
     pub state: ShipState,
     /// Velocidad angular actual (rad/s) en ejes locales: (cabeceo, guiñada, alabeo).
     ang_vel: Vec3,
@@ -78,6 +103,7 @@ impl Ship {
         Self {
             prev: state,
             state,
+            orbit: None,
             ang_vel: Vec3::ZERO,
             throttle: 0.0,
             boosting: false,
@@ -108,8 +134,113 @@ impl Ship {
         self.state.vel.length()
     }
 
+    /// Planeta más cercano (por altura sobre su superficie) y esa altura.
+    pub fn nearest_planet(&self, colliders: &[Collider]) -> Option<(usize, f32)> {
+        colliders
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c.surface, Surface::Terrain { .. }))
+            .map(|(i, c)| (i, c.signed_distance(self.state.pos)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Engancha o suelta la órbita automática.
+    pub fn toggle_orbit(&mut self, colliders: &[Collider]) -> OrbitToggle {
+        if self.orbit.take().is_some() {
+            // Al soltar, la nave conserva su velocidad: el vuelo no se corta.
+            return OrbitToggle::Released;
+        }
+        let Some((body, altitude)) = self.nearest_planet(colliders) else { return OrbitToggle::TooFar };
+        if altitude > ORBIT_ENGAGE_ALTITUDE {
+            return OrbitToggle::TooFar;
+        }
+        let c = &colliders[body];
+        let s = &self.state;
+        let r = s.pos - c.center;
+        let n = r.normalize();
+        // El plano de la órbita sigue la dirección en la que ya se movía la
+        // nave (o hacia donde apunta, si iba muy lento).
+        let rel = s.vel - c.velocity;
+        let tangent = rel - n * rel.dot(n);
+        let heading = if tangent.length() > 1.0 { tangent } else { s.forward - n * s.forward.dot(n) };
+        let mut axis = n.cross(heading);
+        if axis.length() < 1e-3 {
+            axis = n.cross(if n.y.abs() < 0.9 { Vec3::Y } else { Vec3::X });
+        }
+        let min_radius = c.radius_toward(s.pos) + ORBIT_MIN_ALTITUDE;
+        self.orbit = Some(OrbitLock {
+            body,
+            name: c.name,
+            radius: r.length().max(min_radius),
+            axis: axis.normalize(),
+            speed: tangent.length().clamp(ORBIT_DEFAULT_SPEED, ORBIT_MAX_SPEED),
+        });
+        OrbitToggle::Engaged(c.name)
+    }
+
+    /// Un paso de la órbita automática: la nave se mueve sola en círculo
+    /// alrededor del planeta (que también se mueve) a altura constante.
+    fn orbit_step(&mut self, input: &ShipInput, dt: f32, colliders: &[Collider]) {
+        let Some(mut o) = self.orbit else { return };
+        let Some(c) = colliders.get(o.body) else {
+            self.orbit = None;
+            return;
+        };
+        let s = &mut self.state;
+        let r = s.pos - c.center;
+        let n = r.normalize();
+
+        // Controles dentro de la órbita.
+        o.speed = (o.speed + input.thrust * ORBIT_ACCEL * dt).clamp(ORBIT_MIN_SPEED, ORBIT_MAX_SPEED);
+        o.radius += input.lift * ORBIT_CLIMB * dt;
+        o.axis = o.axis.rotate_around(n, input.roll * ORBIT_TILT_RATE * dt);
+        // Nunca por debajo del terreno que hay justo abajo.
+        o.radius = o.radius.max(c.radius_toward(s.pos) + ORBIT_MIN_ALTITUDE);
+
+        // El eje se mantiene perpendicular a la vertical; la dirección de
+        // avance es tangente a la esfera.
+        o.axis = (o.axis - n * o.axis.dot(n)).normalize();
+        let tangent = o.axis.cross(n);
+
+        // Velocidad deseada: la del planeta + avance tangencial + un resorte
+        // que corrige la altura. Se alcanza de forma suave (exponencial).
+        let target = c.velocity + tangent * o.speed + n * ((o.radius - r.length()) * ORBIT_SPRING);
+        s.vel = s.vel.lerp(target, 1.0 - (-ORBIT_RESPONSE * dt).exp());
+        s.pos += s.vel * dt;
+
+        // La nave mira hacia donde avanza, con el techo hacia fuera del planeta.
+        let k = 1.0 - (-4.0 * dt).exp();
+        s.forward = s.forward.lerp(tangent, k).normalize();
+        s.up = s.up.lerp(n, k);
+        let right = s.forward.cross(s.up).normalize();
+        s.up = right.cross(s.forward);
+        self.ang_vel = Vec3::ZERO;
+
+        self.orbit = Some(o);
+        self.boosting = false;
+        let target_thr = 0.25 + 0.5 * (o.speed / ORBIT_MAX_SPEED);
+        self.throttle += (target_thr - self.throttle) * (1.0 - (-8.0 * dt).exp());
+        self.resolve_collisions(colliders);
+    }
+
+    fn resolve_collisions(&mut self, colliders: &[Collider]) {
+        let s = &mut self.state;
+        for c in colliders {
+            if let Some(hit) = c.resolve(&mut s.pos, &mut s.vel, SHIP_COLLISION_RADIUS, SHIP_RESTITUTION, SHIP_FRICTION) {
+                self.contact_with = c.name;
+                if hit.impact_speed > 0.5 || self.contact_timer > 0.0 {
+                    self.contact_timer = 1.0;
+                }
+            }
+        }
+    }
+
     /// Un paso de física de duración fija `dt`.
     fn step(&mut self, input: &ShipInput, dt: f32, colliders: &[Collider]) {
+        if self.orbit.is_some() {
+            self.orbit_step(input, dt, colliders);
+            return;
+        }
         // --- Giro progresivo -------------------------------------------------
         // La velocidad angular se acerca a la deseada de forma exponencial:
         // no gira de golpe ni se detiene de golpe.
@@ -158,14 +289,7 @@ impl Ship {
         s.pos += s.vel * dt;
 
         // --- Colisión: la nave no puede atravesar planetas ni el sol ---------
-        for c in colliders {
-            if let Some(hit) = c.resolve(&mut s.pos, &mut s.vel, SHIP_COLLISION_RADIUS, SHIP_RESTITUTION, SHIP_FRICTION) {
-                self.contact_with = c.name;
-                if hit.impact_speed > 0.5 || self.contact_timer > 0.0 {
-                    self.contact_timer = 1.0;
-                }
-            }
-        }
+        self.resolve_collisions(colliders);
 
         // Potencia visual del motor (flama), también suavizada.
         let target_thr = (input.thrust.max(0.0) * boost / SHIP_BOOST_MULT).max(input.lift.abs() * 0.3);
@@ -237,5 +361,59 @@ mod tests {
             assert!(d >= SHIP_COLLISION_RADIUS - 1e-3, "atravesó la superficie: {d}");
         }
         assert_eq!(ship.contact_with, "p");
+    }
+
+    #[test]
+    fn orbit_mode_circles_planet_at_constant_altitude() {
+        use crate::collision::{Collider, Surface};
+        use crate::math::Mat4;
+        use crate::planet::{Orbit, Planet, PlanetDef, Terrain};
+        use crate::shaders::ToonShader;
+
+        let def = PlanetDef {
+            name: "p",
+            radius: 7.0,
+            orbit: Orbit { radius: 0.0, speed: 0.0, phase: 0.0, inclination: 0.0 },
+            spin_speed: 0.0,
+            axial_tilt: 0.0,
+            seed: 1,
+            terrain: Terrain::FLAT,
+        };
+        let planet = Planet::new(def, Box::new(ToonShader { ambient: 0.3, outline: 0.0 }));
+        let c = Collider {
+            center: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            surface: Surface::Terrain { planet: &planet, inv_rotation: Mat4::IDENTITY },
+            name: "p",
+        };
+
+        // Muy lejos: no se puede enganchar.
+        let mut far = Ship::new(Vec3::new(0.0, 0.0, 60.0), -Vec3::X);
+        assert!(matches!(far.toggle_orbit(&[c]), OrbitToggle::TooFar));
+
+        let mut ship = Ship::new(Vec3::new(0.0, 0.0, 12.0), -Vec3::X);
+        assert!(matches!(ship.toggle_orbit(&[c]), OrbitToggle::Engaged("p")));
+
+        let idle = ShipInput::default();
+        let mut angle = 0.0;
+        let mut prev = ship.state.pos;
+        for i in 0..600 {
+            ship.update(&idle, 1.0 / 60.0, &[c]);
+            let p = ship.state.pos;
+            angle += prev.normalize().dot(p.normalize()).clamp(-1.0, 1.0).acos();
+            prev = p;
+            if i > 120 {
+                assert!((p.length() - 12.0).abs() < 0.3, "altura estable: {}", p.length());
+            }
+        }
+        // 10 s a 5 u/s sobre un radio de 12: ~4 radianes de vuelta.
+        assert!(angle > 3.0, "debe rodear el planeta solo: {angle}");
+        // La nave mira hacia donde avanza y su techo apunta hacia fuera.
+        assert!(ship.state.up.dot(ship.state.pos.normalize()) > 0.95);
+
+        // Al soltar conserva la velocidad (el vuelo no se corta).
+        let v = ship.state.vel;
+        assert!(matches!(ship.toggle_orbit(&[c]), OrbitToggle::Released));
+        assert!(ship.orbit.is_none() && (ship.state.vel - v).length() < 1e-6);
     }
 }

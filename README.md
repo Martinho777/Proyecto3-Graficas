@@ -34,7 +34,7 @@ ventana, la entrada y mostrar el framebuffer.
 
 ## Características que solicitamos evaluar
 
-Total: **172 puntos técnicos** del menú (+ presentación). La nota máxima es 100.
+Total: **180 puntos técnicos** del menú (+ presentación). La nota máxima es 100.
 
 | Característica | Pts | Dónde verlo |
 |---|---|---|
@@ -48,11 +48,12 @@ Total: **172 puntos técnicos** del menú (+ presentación). La nota máxima es 
 | Deformación de la geometría con ruido | 10 | `src/planet.rs` → `build_terrain_mesh`: cada vértice de la icosfera se desplaza con la función de altura (fBm / ridged) |
 | Generación / subdivisión procedural de geometría antes de rasterizar | 10 | `src/mesh.rs` → `icosphere`: icosaedro subdividido 2 a 5 veces (320 a 20 480 triángulos) |
 | Aceleración, frenado y giro progresivos, iguales a cualquier FPS | 8 | `src/ship.rs`: física con paso fijo de 120 Hz e interpolación. Test `same_result_at_30_and_144_fps` |
+| Modo de control local para rodear un planeta sin cortar el vuelo | 8 | Tecla **O** cerca de un planeta: la nave lo rodea sola a altura constante (W/S velocidad, Espacio/Ctrl altura, A/D inclinan la órbita, O la suelta y conserva la velocidad). `src/ship.rs` → `toggle_orbit` / `orbit_step`. Test `orbit_mode_circles_planet_at_constant_altitude` |
 | Colisión que impide atravesar el planeta | 4 | `src/collision.rs`: usa la altura real del terreno; aviso "CONTACTO" en el HUD |
 | Descarte de objetos fuera de la vista | 7 | `src/scene.rs` → `draw_body` (esfera envolvente contra el frustum). **F1** muestra los contadores y **F3** lo apaga: vista lejana 7 628 → 43 798 triángulos procesados |
 | Niveles de detalle según la distancia | 8 | `src/scene.rs` → `select_lod` (malla según el tamaño en pantalla; objetos de superficie solo de cerca). **F4** lo apaga: vista lejana 7 628 → 255 502 triángulos procesados |
 
-No implementados: modo de control local para rodear un planeta y gravedad.
+No implementado: gravedad.
 
 ## Integrantes
 
@@ -79,6 +80,8 @@ cargo run --release
 | A / D | Alabeo (rodar) |
 | Espacio / Ctrl | Subir / bajar |
 | Shift | Turbo |
+| O | Órbita automática alrededor del planeta cercano (O otra vez para soltarla) |
+| Enter / clic | Despegar desde la pantalla de inicio |
 | C | Cámara: tercera persona / cabina |
 | R | Reiniciar la nave |
 | Tab / Esc | Soltar / capturar el mouse |
@@ -102,11 +105,3 @@ cargo run --release
 | `src/shaders/` | Fragment shaders: sol, jungla, embrujado, toon (nave y objetos), flama, fantasma |
 | `assets/models/nave_cohete.py` | Script de Blender que genera la nave |
 | `assets/models/modelos_superficie.py` | Script de Blender: palmera, helecho, esqueleto, árbol seco, lápida, casona, fantasma |
-
-## Uso de IA
-
-- **Emily Góngora:** usé un asistente de IA (Claude) como apoyo para escribir
-  el código de los planetas Ciudad y Hielo (shaders y reglas de colocación en
-  `src/mundos/emily/`), el script de modelos `assets/models/modelos_emily.py`
-  y para iterar el aspecto con capturas y `--bench`. Revisé, probé y puedo
-  explicar todo el código entregado.
